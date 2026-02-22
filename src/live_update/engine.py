@@ -164,6 +164,32 @@ class LiveUpdateEngine:
         with self._state_lock:
             return {policy_id: state.policy for policy_id, state in self._states.items()}
 
+    def snapshot_workflow_policies(self) -> dict[str, tuple[StructuredPolicy, ...]]:
+        """
+        Returns the currently active policies per registered workflow.
+        If a workflow does not expose active policy state, this falls back to
+        subscription mappings from the live policy state.
+        """
+        with self._workflow_lock:
+            workflows = dict(self._workflows)
+            subscriptions = {k: set(v) for k, v in self._subscriptions.items()}
+        with self._state_lock:
+            states = {policy_id: state.policy for policy_id, state in self._states.items()}
+
+        snapshot: dict[str, tuple[StructuredPolicy, ...]] = {}
+        for workflow_id, workflow in workflows.items():
+            if hasattr(workflow, "list_active_policies"):
+                policies = workflow.list_active_policies()
+                snapshot[workflow_id] = tuple(policies)
+                continue
+
+            subscribed = subscriptions.get(workflow_id, set())
+            if not subscribed:
+                snapshot[workflow_id] = tuple(states.values())
+            else:
+                snapshot[workflow_id] = tuple(states[p] for p in sorted(subscribed) if p in states)
+        return snapshot
+
     def _run_monitor_loop(self) -> None:
         while not self._stop_event.is_set():
             try:
